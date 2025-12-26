@@ -36,6 +36,7 @@ class MatmulEpilogueFusion(abstract_drr.DrrPass):
         out_num = self.number_of_outputs()
         o.matmul_op = o.ap_native_op("pd_op.matmul")
         o.matmul_op([t.input0, t.input1], [t.mm_out])
+        o.norm_op = o.ap_native_op("pd_op.layernorm")
         o.trivial_op = o.ap_trivial_fusion_op()
         o.trivial_op(
             [
