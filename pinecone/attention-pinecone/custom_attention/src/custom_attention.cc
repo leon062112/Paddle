@@ -1,15 +1,13 @@
 // pytorch相关头文件
-#include <ATen/ATen.h>
-#include <torch/extension.h>
-#include <torch/python.h>
-#include <torch/nn/functional.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAStream.h>
-#include <ATen/cuda/CUDAGeneratorImpl.h>  // For at::Generator and at::PhiloxCudaState
-#include "include/philox_unpack.cuh"  // For at::cuda::philox::unpack
+// #include <ATen/ATen.h>
+// #include <torch/extension.h>
+// #include <torch/python.h>
+// #include <torch/nn/functional.h>
+// #include <c10/cuda/CUDAGuard.h>
+// #include <c10/cuda/CUDAStream.h>
+// #include <ATen/cuda/CUDAGeneratorImpl.h>  // For at::Generator and at::PhiloxCudaState
+// #include "include/philox_unpack.cuh"  // For at::cuda::philox::unpack
 
-#include "paddle/extension.h"
-#include <phi/core/ddim.h> 
 #include <cuda_fp16.h> 
 #include <cutlass/numeric_types.h>
 #include "include/namespace_config.h"
@@ -18,12 +16,13 @@
 #include "include/static_switch.h"
 #include "paddle/extension.h"
 #include "paddle/phi/api/include/api.h"
-#include "paddle/phi/common/data_type.h"
-#include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/backends/gpu/gpu_info.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
-#include "paddle/phi/core/platform/cuda_device_guard.h"
+#include "paddle/phi/backends/gpu/gpu_info.h"
+#include "paddle/phi/common/data_type.h"
+#include "paddle/phi/core/ddim.h"
+#include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/platform/device_context.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 #include <cuda_runtime.h>
 
 
@@ -181,24 +180,24 @@ void set_params_fprop(Flash_fwd_params &params,
 }
 
 //要保留吗
-void set_params_alibi(Flash_fwd_params &params, std::optional<at::Tensor> &alibi_slopes_, int batch_size, int num_heads){
-#ifdef FLASHATTENTION_DISABLE_ALIBI
-    TORCH_CHECK(!alibi_slopes_.has_value(), "This flash attention build does not support alibi.");
-    params.alibi_slopes_ptr = nullptr;
-#else
-    if (alibi_slopes_.has_value()) {
-        auto alibi_slopes = alibi_slopes_.value();
-        TORCH_CHECK(alibi_slopes.dtype() == torch::kFloat32, "ALiBi slopes must have dtype fp32");
-        CHECK_DEVICE(alibi_slopes);
-        TORCH_CHECK(alibi_slopes.stride(-1) == 1, "ALiBi slopes tensor must have contiguous last dimension");
-        TORCH_CHECK(alibi_slopes.sizes() == torch::IntArrayRef({num_heads}) || alibi_slopes.sizes() == torch::IntArrayRef({batch_size, num_heads}));
-        params.alibi_slopes_ptr = alibi_slopes.data_ptr();
-        params.alibi_slopes_batch_stride = alibi_slopes.dim() == 2 ? alibi_slopes.stride(0) : 0;
-    } else {
-        params.alibi_slopes_ptr = nullptr;
-    }
-#endif
-}
+// void set_params_alibi(Flash_fwd_params &params, std::optional<at::Tensor> &alibi_slopes_, int batch_size, int num_heads){
+// #ifdef FLASHATTENTION_DISABLE_ALIBI
+//     TORCH_CHECK(!alibi_slopes_.has_value(), "This flash attention build does not support alibi.");
+//     params.alibi_slopes_ptr = nullptr;
+// #else
+//     if (alibi_slopes_.has_value()) {
+//         auto alibi_slopes = alibi_slopes_.value();
+//         TORCH_CHECK(alibi_slopes.dtype() == torch::kFloat32, "ALiBi slopes must have dtype fp32");
+//         CHECK_DEVICE(alibi_slopes);
+//         TORCH_CHECK(alibi_slopes.stride(-1) == 1, "ALiBi slopes tensor must have contiguous last dimension");
+//         TORCH_CHECK(alibi_slopes.sizes() == torch::IntArrayRef({num_heads}) || alibi_slopes.sizes() == torch::IntArrayRef({batch_size, num_heads}));
+//         params.alibi_slopes_ptr = alibi_slopes.data_ptr();
+//         params.alibi_slopes_batch_stride = alibi_slopes.dim() == 2 ? alibi_slopes.stride(0) : 0;
+//     } else {
+//         params.alibi_slopes_ptr = nullptr;
+//     }
+// #endif
+// }
 
 
 //不用改
@@ -275,8 +274,8 @@ std::tuple<paddle::Tensor, paddle::Tensor> set_params_splitkv(
                 paddle::DataType::FLOAT32,
                 place
             );
-            params.softmax_lseaccum_ptr = softmax_lse_accum.data_ptr();
-            params.oaccum_ptr = out_accum.data_ptr();
+            params.softmax_lseaccum_ptr = const_cast<void*>(softmax_lse_accum.data());
+            params.oaccum_ptr = const_cast<void*>(out_accum.data());
         }
         PD_CHECK(params.num_splits <= 128, "num_splits > 128 not supported");
     }
@@ -285,14 +284,17 @@ std::tuple<paddle::Tensor, paddle::Tensor> set_params_splitkv(
 }
 
 
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, 
-    const int* full_row_ptr, const int* full_col_idx,
-    const int* part_row_ptr, const int* part_col_idx, uint64_t* inner_bitmaps,
-    const int* load_row_ptr, const int* load_col_idx) 
-{
-    // std::cout << ">>> [DAVID INFO] Running mha_fwd with d=" << params.d 
-    //           << ", causal=" << params.is_causal << std::endl;
-
+void run_mha_fwd(
+        Flash_fwd_params &params, 
+        cudaStream_t stream, 
+        const int* full_row_ptr, 
+        const int* full_col_idx,
+        const int* part_row_ptr, 
+        const int* part_col_idx, 
+        const uint64_t* inner_bitmaps,
+        const int* load_row_ptr, 
+        const int* load_col_idx
+    ){
     // 支持 cutlass::half_t, HeadDim=64, causal=true
     if (params.d != 64) {
         PD_THROW("Only head_dim=64 is supported");
@@ -316,34 +318,40 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream,
     }
 }
 
-
-std::vector<paddle::Tensor>
-flashattn_binding_gpu(
-        paddle::Tensor &q,         // batch_size x seqlen_q x num_heads x round_multiple(head_size, 8)
+std::vector<paddle::Tensor> flashattn_binding_gpu(
+        paddle::Tensor &q_in,         // batch_size x seqlen_q x num_heads x round_multiple(head_size, 8)
         const paddle::Tensor &k,         // batch_size x seqlen_k x num_heads_k x round_multiple(head_size, 8)
         const paddle::Tensor &v,         // batch_size x seqlen_k x num_heads_k x round_multiple(head_size, 8)
-        paddle::Tensor full_row_ptr, paddle::Tensor full_col_idx,
-        paddle::Tensor part_row_ptr, paddle::Tensor part_col_idx, paddle::Tensor inner_bitmaps,
-        paddle::Tensor load_row_ptr, paddle::Tensor load_col_idx,
-        std::optional<paddle::Tensor> &out_,          // batch_size x seqlen_q x num_heads x round_multiple(head_size, 8)
-        std::optional<paddle::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
+        const paddle::Tensor &full_row_ptr, 
+        const paddle::Tensor &full_col_idx,
+        const paddle::Tensor &part_row_ptr, 
+        const paddle::Tensor &part_col_idx, 
+        const paddle::Tensor &inner_bitmaps,
+        const paddle::Tensor &load_row_ptr, 
+        const paddle::Tensor &load_col_idx,
+        // std::optional<paddle::Tensor> &out_,          // batch_size x seqlen_q x num_heads x round_multiple(head_size, 8)
+        // std::optional<paddle::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
         const float p_dropout,
         const float softmax_scale,
         bool is_causal,
         int window_size_left,
         int window_size_right,
         const float softcap,
-        const bool return_softmax,
-        std::optional<at::Generator> gen_
+        const bool return_softmax
+        // std::optional<at::Generator> gen_
     ) {
 
-    // Otherwise the kernel will be launched from cuda:0 device
-    at::cuda::CUDAGuard device_guard{q.device()};
+    auto place = q_in.place();
+    auto* dev_ctx = phi::DeviceContextPool::Instance().Get(place);
+    auto* gpu_ctx = dynamic_cast<const phi::GPUContext*>(dev_ctx);
+    PD_CHECK(gpu_ctx != nullptr, "Failed to get phi::GPUContext from DeviceContextPool");
+
+    cudaStream_t stream = gpu_ctx->stream();
 
     auto [cc_major, cc_minor] = get_compute_capability(get_current_device());
     bool is_sm8x_min = cc_major >= 8;
     PD_CHECK(is_sm8x_min, "FlashAttention only supports Ampere GPUs or newer.");
-
+    paddle::Tensor q = q_in;
     auto q_dtype = q.dtype();
     PD_CHECK(q_dtype == paddle::DataType::FLOAT16 || q_dtype == paddle::DataType::BFLOAT16,
                 "FlashAttention only support fp16 and bf16 data type");
@@ -352,9 +360,10 @@ flashattn_binding_gpu(
 
     CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
 
-    PD_CHECK(q.stride(-1) == 1, "Input tensor must have contiguous last dimension");
-    PD_CHECK(k.stride(-1) == 1, "Input tensor must have contiguous last dimension");
-    PD_CHECK(v.stride(-1) == 1, "Input tensor must have contiguous last dimension");
+    // TODO
+    // PD_CHECK(q.stride(-1) == 1, "Input tensor must have contiguous last dimension");
+    // PD_CHECK(k.stride(-1) == 1, "Input tensor must have contiguous last dimension");
+    // PD_CHECK(v.stride(-1) == 1, "Input tensor must have contiguous last dimension");
 
     // const auto sizes = q.sizes();
     const auto q_shape = q.shape(); 
@@ -386,15 +395,24 @@ flashattn_binding_gpu(
     if (window_size_right >= seqlen_k) { window_size_right = -1; }
 
     // causal=true is the same as causal=false in this case
-    if (seqlen_q == 1 && !alibi_slopes_.has_value()) { is_causal = false; }
+    // if (seqlen_q == 1 && !alibi_slopes_.has_value()) { is_causal = false; }
+    if (seqlen_q == 1) { is_causal = false; }
     if (is_causal) { window_size_right = 0; }
 
     // Faster to transpose q from (b, 1, (nheads_kv ngroups), d) to (b, ngroups, nheads_kv, d) in this case
     // H/t Daniel Haziza
-    const int seqlenq_ngroups_swapped = seqlen_q == 1 && num_heads > num_heads_k && window_size_left < 0 && window_size_right < 0 && p_dropout == 0.f && head_size % 8 == 0 && !alibi_slopes_.has_value();
-    const int ngroups = num_heads / num_heads_k;
+    // const int seqlenq_ngroups_swapped = 
+    //     seqlen_q == 1 && num_heads > num_heads_k && 
+    //     window_size_left < 0 && window_size_right < 0 && 
+    //     p_dropout == 0.f && head_size % 8 == 0 && !alibi_slopes_.has_value();
+    const int seqlenq_ngroups_swapped =
+        seqlen_q == 1 && num_heads > num_heads_k &&
+        window_size_left < 0 && window_size_right < 0 &&
+        p_dropout == 0.f && head_size % 8 == 0;
+        const int ngroups = num_heads / num_heads_k;
     if (seqlenq_ngroups_swapped) {
-        q = q.reshape({batch_size, num_heads_k, ngroups, head_size}).transpose(std::vector<int>{0, 2, 1, 3}); 
+        q = paddle::experimental::reshape(q, {batch_size, num_heads_k, ngroups, head_size});
+        q = paddle::experimental::transpose(q, std::vector<int>{0, 2, 1, 3});
         seqlen_q = ngroups;
         num_heads = num_heads_k;
     }
@@ -403,19 +421,20 @@ flashattn_binding_gpu(
     CHECK_SHAPE(k, batch_size, seqlen_k, num_heads_k, head_size);
     CHECK_SHAPE(v, batch_size, seqlen_k, num_heads_k, head_size);
 
-    paddle::Tensor out;
-    if (out_.has_value()) {
-        out = out_.value();
-        PD_CHECK(out.dtype() == q_dtype, "Output must have the same dtype as inputs");
-        CHECK_DEVICE(out);
-        // PD_CHECK(out.stride(-1) == 1, "Output tensor must have contiguous last dimension");
-        // CHECK_SHAPE(out, batch_size, sizes[1], sizes[2], head_size);
-        if (seqlenq_ngroups_swapped) {
-            out = out.reshape({batch_size, num_heads_k, ngroups, head_size}).transpose(std::vector<int>{0, 2, 1, 3}); 
-        }
-    } else {
-        out = paddle::empty_like(q);
-    }
+    paddle::Tensor out = paddle::empty_like(q);
+    // if (out_.has_value()) {
+    //     out = out_.value();
+    //     PD_CHECK(out.dtype() == q_dtype, "Output must have the same dtype as inputs");
+    //     CHECK_DEVICE(out);
+    //     // PD_CHECK(out.stride(-1) == 1, "Output tensor must have contiguous last dimension");
+    //     // CHECK_SHAPE(out, batch_size, sizes[1], sizes[2], head_size);
+    //     if (seqlenq_ngroups_swapped) {
+    //         out = paddle::experimental::reshape(out, {batch_size, num_heads_k, ngroups, head_size});
+    //         out = paddle::experimental::transpose(out, std::vector<int>{0, 2, 1, 3});
+    //     }
+    // } else {
+    //     out = paddle::empty_like(q);
+    // }
 
     auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
     const int head_size_rounded = round_multiple(head_size, head_size <= 128 ? 32 : 64);
@@ -424,7 +443,7 @@ flashattn_binding_gpu(
 
     // auto opts = q.options();
     auto dtype = q.dtype();          // paddle::DataType
-    auto place = q.place();          // paddle::Place (GPUPlace)
+    // auto place = q.place();          // paddle::Place (GPUPlace)
 
     // auto softmax_lse = paddle::empty({batch_size, num_heads, seqlen_q}, opts.dtype(at::kFloat));
     auto softmax_lse = paddle::empty({batch_size, num_heads, seqlen_q}, paddle::DataType::FLOAT32,place);
@@ -450,8 +469,8 @@ flashattn_binding_gpu(
                      /*cu_seqlens_q_d=*/nullptr,
                      /*cu_seqlens_k_d=*/nullptr,
                      /*seqused_k=*/nullptr,
-                     return_softmax ? p.data_ptr() : nullptr,
-                     softmax_lse.data_ptr(),
+                     return_softmax ? p.data() : nullptr,
+                     softmax_lse.data(),
                      p_dropout,
                      softmax_scale,
                      window_size_left,
@@ -473,45 +492,62 @@ flashattn_binding_gpu(
     // auto rng_state = paddle::empty({2}, options.dtype(torch::kInt64));
     // Forward kernel will populate memory with the seed and offset.
     // params.rng_state = reinterpret_cast<uint64_t*>(rng_state.data_ptr());
-    
-    auto place = q.place(); // 假设 q 是输入 tensor，已知在 GPU
+
+    PD_CHECK(p_dropout == 0.0f, "This Paddle FlashAttention build currently does not support dropout (p_dropout must be 0).");
+    PD_CHECK(!return_softmax, "return_softmax requires dropout; currently unsupported.");
+    // auto place = q.place(); // 假设 q 是输入 tensor，已知在 GPU
     auto rng_state = paddle::empty({2}, paddle::DataType::INT64, place);
-    // 获取原始指针（Paddle 使用 .data<T>()）
-    params.rng_state = reinterpret_cast<uint64_t*>(rng_state.data<int64_t>());
 
-    if (p_dropout > 0.0)  {
-        auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(
-            gen_, at::cuda::detail::getDefaultCUDAGenerator());
-        // See Note [Acquire lock when using random generators]
-        std::lock_guard<std::mutex> lock(gen->mutex_);
-        params.philox_args = gen->philox_cuda_state(counter_offset);
-    }
+    // 获取原始指针（Paddle 使用 .data_ptr()）
+    // params.rng_state = reinterpret_cast<uint64_t*>(rng_state.data<int64_t>());
 
-    set_params_alibi(params, alibi_slopes_, batch_size, num_heads);
+    // if (p_dropout > 0.0)  {
+    //     auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(
+    //         gen_, at::cuda::detail::getDefaultCUDAGenerator());
+    //     // See Note [Acquire lock when using random generators]
+    //     std::lock_guard<std::mutex> lock(gen->mutex_);
+    //     params.philox_args = gen->philox_cuda_state(counter_offset);
+    // }
+
+    // set_params_alibi(params, alibi_slopes_, batch_size, num_heads);
 
     if (seqlen_k > 0) {
-        auto stream = at::cuda::getCurrentCUDAStream().stream();
         run_mha_fwd(params, stream, 
-            full_row_ptr.data_ptr<int>(),
-            full_col_idx.data_ptr<int>(),
-            part_row_ptr.data_ptr<int>(),
-            part_col_idx.data_ptr<int>(),
-            // reinterpret_cast< __half*>(part_block_mask.data_ptr<at::Half>()),
-            // reinterpret_cast<uint64_t*>(inner_bitmaps.data_ptr<int64_t>()),
-            reinterpret_cast<uint64_t*>(inner_bitmaps.data_ptr()),
-            load_row_ptr.data_ptr<int>(),
-            load_col_idx.data_ptr<int>()
+            reinterpret_cast<const int*>(full_row_ptr.data()),
+            reinterpret_cast<const int*>(full_col_idx.data()),
+            reinterpret_cast<const int*>(part_row_ptr.data()),
+            reinterpret_cast<const int*>(part_col_idx.data()),
+            reinterpret_cast<const uint64_t*>(inner_bitmaps.data()),
+            reinterpret_cast<const int*>(load_row_ptr.data()),
+            reinterpret_cast<const int*>(load_col_idx.data())
+            // full_row_ptr.data_ptr<int>(),
+            // full_col_idx.data_ptr<int>(),
+            // part_row_ptr.data_ptr<int>(),
+            // part_col_idx.data_ptr<int>(),
+            // // reinterpret_cast< __half*>(part_block_mask.data_ptr<at::Half>()),
+            // // reinterpret_cast<uint64_t*>(inner_bitmaps.data_ptr<int64_t>()),
+            // reinterpret_cast<uint64_t*>(inner_bitmaps.data()),
+            // load_row_ptr.data_ptr<int>(),
+            // load_col_idx.data_ptr<int>()
         );
     } else {
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
-        out.zero_();
-        softmax_lse.fill_(std::numeric_limits<float>::infinity());
+        // out.zero_();
+        // softmax_lse.fill_(std::numeric_limits<float>::infinity());
+        out = paddle::full(out.shape(), 0.0f, out.dtype(), out.place());
+        softmax_lse = paddle::full(softmax_lse.shape(),std::numeric_limits<float>::infinity(),softmax_lse.dtype(),softmax_lse.place());
     }
 
     if (seqlenq_ngroups_swapped) {
-        out = out.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size});
-        q = q.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size});
-        softmax_lse = softmax_lse.reshape({batch_size, num_heads_k * seqlen_q, 1});
+        // out = out.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size});
+        // q = q.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size});
+        // softmax_lse = softmax_lse.reshape({batch_size, num_heads_k * seqlen_q, 1});
+        out = paddle::experimental::reshape(out, {batch_size, num_heads_k, ngroups, head_size});
+        out = paddle::experimental::transpose(out, std::vector<int>{0, 2, 1, 3});
+        q = paddle::experimental::reshape(q, {batch_size, num_heads_k, ngroups, head_size});
+        q = paddle::experimental::transpose(q, std::vector<int>{0, 2, 1, 3});
+        softmax_lse = paddle::experimental::reshape(softmax_lse, {batch_size, num_heads_k * seqlen_q, 1});
+
     }
     return {out, softmax_lse, p, rng_state};
 }
@@ -521,8 +557,24 @@ flashattn_binding_gpu(
 } // namespace FLASH_NAMESPACE
 
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
-{
-    m.doc() = "Flash_Attn_Binding: Test for Pinecone Fund";
-    m.def("forward", &FLASH_NAMESPACE::flashattn_binding_gpu, "FlashAttn Binded op Forward"); 
-}
+// PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+// {
+//     m.doc() = "Flash_Attn_Binding: Test for Pinecone Fund";
+//     m.def("forward", &FLASH_NAMESPACE::flashattn_binding_gpu, "FlashAttn Binded op Forward"); 
+// }
+
+PD_BUILD_OP(custom_attention)
+    .Inputs({"q", "k", "v", 
+             "full_row_ptr", "full_col_idx",
+             "part_row_ptr", "part_col_idx", 
+             "inner_bitmaps",
+             "load_row_ptr", "load_col_idx"})
+    .Outputs({"out", "softmax_lse", "p", "rng_state"})
+    .Attrs({"p_dropout: float",
+            "softmax_scale: float",
+            "is_causal: bool",
+            "window_size_left: int",
+            "window_size_right: int",
+            "softcap: float",
+            "return_softmax: bool"})
+    .SetKernelFn(PD_KERNEL(FLASH_NAMESPACE::flashattn_binding_gpu));

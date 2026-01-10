@@ -7,7 +7,7 @@
 #pragma once
 
 #include "namespace_config.h"
-#include "philox_unpack.cuh" 
+// #include "philox_unpack.cuh" 
 
 #include <cute/tensor.hpp>
 #include <cutlass/cutlass.h>
@@ -47,9 +47,9 @@ __forceinline__ __device__ auto bind_get_lse_tile(const Params &params, const in
 
 
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Is_softcap, bool Return_softmax, typename Params>
-inline __device__ void compute_mask_attn(const Params &params, 
+inline __device__ void compute_mask_attn(const Params &params,
     const int* full_row_ptr, const int* full_col_idx,
-    const int* part_row_ptr, const int* part_col_idx, uint64_t* inner_bitmaps,
+    const int* part_row_ptr, const int* part_col_idx, const uint64_t* inner_bitmaps,
     const int* load_row_ptr, const int* load_col_idx) {
 
     const int m_block = blockIdx.x;

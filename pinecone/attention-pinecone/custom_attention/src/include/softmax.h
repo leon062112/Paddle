@@ -11,7 +11,7 @@
 #include <cutlass/numeric_types.h>
 
 #include "namespace_config.h"
-#include "philox.cuh"
+// #include "philox.cuh"
 #include "utils.h"
 
 namespace FLASH_NAMESPACE {

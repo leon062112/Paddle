@@ -42,7 +42,7 @@ DEFINE_FLASH_FORWARD_KERNEL(flash_fwd_kernel, bool Is_dropout, bool Is_causal, b
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Is_softcap, bool Return_softmax>
 __global__ void bind_fwd_kernel(const Flash_fwd_params params,
     const int* full_row_ptr, const int* full_col_idx,
-    const int* part_row_ptr, const int* part_col_idx, uint64_t* inner_bitmaps,
+    const int* part_row_ptr, const int* part_col_idx, const uint64_t* inner_bitmaps,
     const int* load_row_ptr, const int* load_col_idx) {
 
     static_assert(!(Is_causal && Is_local)); // Enforce constraints
@@ -55,7 +55,7 @@ __global__ void bind_fwd_kernel(const Flash_fwd_params params,
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal>
 void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream,
     const int* full_row_ptr, const int* full_col_idx,
-    const int* part_row_ptr, const int* part_col_idx, uint64_t* inner_bitmaps,
+    const int* part_row_ptr, const int* part_col_idx, const uint64_t* inner_bitmaps,
     const int* load_row_ptr, const int* load_col_idx) {
     constexpr size_t smem_size = Kernel_traits::kSmemSize;
     // printf("smem_size = %d\n", smem_size);
@@ -107,7 +107,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream,
 template<typename T, bool Is_causal>
 void run_mha_fwd_hdim64(Flash_fwd_params &params, cudaStream_t stream, 
     const int* full_row_ptr, const int* full_col_idx,
-    const int* part_row_ptr, const int* part_col_idx, uint64_t* inner_bitmaps,
+    const int* part_row_ptr, const int* part_col_idx, const uint64_t* inner_bitmaps,
     const int* load_row_ptr, const int* load_col_idx) {
     constexpr static int Headdim = 64;
 

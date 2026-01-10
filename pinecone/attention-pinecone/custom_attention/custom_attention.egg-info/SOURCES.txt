@@ -1,0 +1,8 @@
+setup.py
+custom_attention.egg-info/PKG-INFO
+custom_attention.egg-info/SOURCES.txt
+custom_attention.egg-info/dependency_links.txt
+custom_attention.egg-info/not-zip-safe
+custom_attention.egg-info/top_level.txt
+src/custom_attention.cc
+src/custom_attention_cuda.cu
