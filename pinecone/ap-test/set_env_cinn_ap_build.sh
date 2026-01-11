@@ -24,4 +24,6 @@ export AP_WORKSPACE_DIR=/paddle-workspace/ap_workspace
 
 # python /denghaodong/code/Paddle/ap-test/test_matmul_epilogue.py > log2.log 2>&1
 
-python /denghaodong/code/Paddle/ap-test/test_matmul_layernorm.py> layernorm.log 2>&1
+# python /denghaodong/code/Paddle/ap-test/test_matmul_layernorm.py> layernorm.log 2>&1
+
+python test_matmul_add_gelu.py > gelu2.log 2>&1

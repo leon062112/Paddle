@@ -99,6 +99,15 @@ class PyToAnfParser:
             self.Bind(asname, ["import", {"str": name}])
         return AtomicAnfExpr(None)
 
+    def ParseImportFrom(self, tree):
+        module_name = tree.module or ""
+        for alias in tree.names:
+            name = alias.name
+            asname = alias.asname if alias.asname is not None else name
+            full_name = module_name + "." + name if module_name else name
+            self.Bind(asname, ["import", {"str": full_name}])
+        return AtomicAnfExpr(None)
+
     def ParseClassDef(self, tree: ast.ClassDef):
         assert len(tree.keywords) == 0
         class_name = tree.name
