@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "paddle/fluid/distributed/collective/process_group_flagcx.h"
+#include "glog/logging.h"
 #include "paddle/common/flags.h"
 #include "paddle/fluid/distributed/collective/common.h"
 #include "paddle/phi/api/lib/utils/allocator.h"
@@ -426,7 +427,7 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupFlagcx::Barrier(
                     0,
                     common::errors::PreconditionNotMet(
                         "The barrier device id must greater or equal than 0."));
-  phi::GPUPlace place(opts.device_id);
+  GPUPlace place(opts.device_id);
   auto allocator = std::unique_ptr<phi::Allocator>(
       new paddle::experimental::DefaultAllocator(place));
   phi::DenseTensorMeta meta(phi::DataType::FLOAT32, phi::DDim{1});
@@ -815,7 +816,7 @@ void ProcessGroupFlagcx::SyncCalcStream(const Place& place,
 
 void ProcessGroupFlagcx::EagerConnect() {
   const auto deviceId = phi::backends::gpu::GetCurrentDeviceId();
-  const auto& place = phi::GPUPlace(deviceId);
+  const auto& place = GPUPlace(deviceId);
   const auto key = GetKeyFromPlace(place);
 
   platform::CUDADeviceGuard cuda_guard(place);
@@ -830,7 +831,7 @@ void ProcessGroupFlagcx::EagerConnect() {
 
 void ProcessGroupFlagcx::EagerConnectRingExchange() {
   std::vector<std::pair<int, int>> peers;
-  const auto& place = phi::GPUPlace(phi::backends::gpu::GetCurrentDeviceId());
+  const auto& place = GPUPlace(phi::backends::gpu::GetCurrentDeviceId());
 
   for (int rank = 0; rank < size_; rank++) {
     auto peer_rank = rank + 1 >= size_ ? 0 : rank + 1;
@@ -1061,6 +1062,20 @@ phi::distributed::FlagcxCommContext* ProcessGroupFlagcx::GetCommContext(
       nullptr,
       common::errors::Unavailable("FlagcxCommContext is nullptr"));
   return comm_context;
+}
+
+void ProcessGroupFlagcx::EraseTensorHolders() {
+  for (const auto& allocation_stream : allocation_stream_pairs_) {
+    auto holder_ptr = allocation_stream.first.lock();
+    if (holder_ptr) {
+      auto stream = reinterpret_cast<gpuStream_t*>(allocation_stream.second);
+      memory::EraseStream(holder_ptr, *stream);
+    }
+  }
+  VLOG(5) << "After task wait/synchronize, total "
+          << allocation_stream_pairs_.size()
+          << " tensor(s) allocation stream have been removed.";
+  allocation_stream_pairs_.clear();
 }
 
 void ProcessGroupFlagcx::StartCoalescing() {

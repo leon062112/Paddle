@@ -14,18 +14,21 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+
+from typing_extensions import overload
 
 import paddle
 from paddle import _C_ops
 from paddle.base import core
+from paddle.base.data_feeder import promote_types
 from paddle.base.framework import Variable
 from paddle.framework import (
     in_dynamic_mode,
 )
 from paddle.utils.decorator_utils import ForbidKeywordsDecorator
 
-from . import nn  # noqa: F401
+from . import nn as nn
 from .proxy import (  # noqa: F401
     disable_torch_proxy,
     enable_torch_proxy,
@@ -41,12 +44,14 @@ if TYPE_CHECKING:
     from paddle import Tensor
 
 __all__ = [
+    'allclose',
     'equal',
     'slogdet',
     'sort',
     'split',
     'min',
     'max',
+    'unique',
     'median',
     'nanmedian',
     'seed',
@@ -56,6 +61,59 @@ __all__ = [
 def __getattr__(name):
     if name == "paddle_triton":
         return paddle_triton_fun()
+
+
+@ForbidKeywordsDecorator(
+    illegal_keys={"x", "y"},
+    func_name="paddle.compat.allclose",
+    correct_name="paddle.allclose",
+)
+def allclose(
+    input: Tensor,
+    other: Tensor,
+    rtol: float = 1e-05,
+    atol: float = 1e-08,
+    equal_nan: bool = False,
+    name: str | None = None,
+) -> bool:
+    """
+    Check if all :math:`input` and :math:`other` satisfy the condition:
+
+    .. math::
+        \\left| input - other \\right| \\leq atol + rtol \\times \\left| other \\right|
+
+    elementwise, for all elements of :math:`input` and :math:`other`. This is analogous to :math:`numpy.allclose`, namely that it returns :math:`True` if
+    two tensors are elementwise equal within a tolerance.
+
+    Args:
+        input (Tensor): The input tensor, it's data type should be float16, float32, float64.
+        other (Tensor): The input tensor, it's data type should be float16, float32, float64.
+        rtol (float, optional): The relative tolerance. Default: :math:`1e-5` .
+        atol (float, optional): The absolute tolerance. Default: :math:`1e-8` .
+        equal_nan (bool, optional): ${equal_nan_comment}. Default: False.
+        name (str|None, optional): Name for the operation. For more information, please
+            refer to :ref:`api_guide_Name`. Default: None.
+
+    Returns:
+        bool: True if the two tensors are elementwise equal within a tolerance, False otherwise.
+
+    Examples:
+        .. code-block:: python
+
+            >>> import paddle
+
+            >>> x = paddle.to_tensor([10000., 1e-07])
+            >>> y = paddle.to_tensor([10000.1, 1e-08])
+            >>> result1 = paddle.compat.allclose(x, y, rtol=1e-05, atol=1e-08, equal_nan=False, name="ignore_nan")
+            >>> print(result1)
+            False
+            >>> result2 = paddle.compat.allclose(x, y, rtol=1e-05, atol=1e-08, equal_nan=True, name="equal_nan")
+            >>> print(result2)
+            False
+    """
+    return paddle.allclose(
+        input, other, rtol=rtol, atol=atol, equal_nan=equal_nan, name=name
+    ).item()
 
 
 @ForbidKeywordsDecorator(
@@ -92,6 +150,14 @@ def equal(
             >>> print(result1)
             False
     """
+    if input.dtype == other.dtype:
+        return paddle.equal_all(input, other).item()
+
+    common_dtype = promote_types(input.dtype, other.dtype)
+    if input.dtype != common_dtype:
+        input = input.cast(common_dtype)
+    if other.dtype != common_dtype:
+        other = other.cast(common_dtype)
 
     return paddle.equal_all(input, other).item()
 
@@ -793,6 +859,115 @@ def sort(
         paddle.assign(outputs, out[0])
         paddle.assign(indices, out[1])
     return SortRetType(values=outputs, indices=indices)
+
+
+@overload
+def unique(
+    input: Tensor,
+    sorted: bool = ...,
+    return_inverse: Literal[True] = ...,
+    return_counts: Literal[True] = ...,
+    dim: int | None = ...,
+) -> tuple[Tensor, Tensor, Tensor]: ...
+
+
+@overload
+def unique(
+    input: Tensor,
+    sorted: bool = ...,
+    return_inverse: Literal[False] = ...,
+    return_counts: Literal[True] = ...,
+    dim: int | None = ...,
+) -> tuple[Tensor, Tensor]: ...
+
+
+@overload
+def unique(
+    input: Tensor,
+    sorted: bool = ...,
+    return_inverse: Literal[True] = ...,
+    return_counts: Literal[False] = ...,
+    dim: int | None = ...,
+) -> tuple[Tensor, Tensor]: ...
+
+
+@overload
+def unique(
+    input: Tensor,
+    sorted: bool = ...,
+    return_inverse: Literal[False] = ...,
+    return_counts: Literal[False] = ...,
+    dim: int | None = ...,
+) -> Tensor: ...
+
+
+@ForbidKeywordsDecorator(
+    illegal_keys={"x", "axis"},
+    func_name="paddle.compat.unique",
+    correct_name="paddle.unique",
+)
+def unique(
+    input,
+    sorted=True,
+    return_inverse=False,
+    return_counts=False,
+    dim=None,
+):
+    r"""
+    Returns the unique elements of `input` in ascending order.
+
+    Args:
+        input(Tensor): The input tensor, it's data type should be float32, float64, int32, int64.
+        sorted(bool, optional): Does not affect the return result, same as PyTorch.
+        return_inverse(bool, optional): If True, also return the indices for where elements in
+            the original input ended up in the returned unique tensor.
+        return_counts(bool, optional): If True, also return the counts for each unique element.
+        dim(int, optional): The axis to apply unique. If None, the input will be flattened.
+            Default: None.
+
+    Returns:
+        tuple (output, inverse_indices, counts). `output` is the unique tensor for `input`. \
+            `inverse_indices` is provided only if `return_inverse` \
+            is True. `counts` is provided only if `return_counts` is True.
+
+    Examples:
+        .. code-block:: python
+
+            >>> import paddle
+
+            >>> x = paddle.to_tensor([2, 3, 3, 1, 5, 3])
+            >>> unique = paddle.compat.unique(x)
+            >>> print(unique)
+            Tensor(shape=[4], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [1, 2, 3, 5])
+
+            >>> _, inverse_indices, counts = paddle.compat.unique(x, return_inverse=True, return_counts=True)
+            >>> print(inverse_indices)
+            Tensor(shape=[6], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [1, 2, 2, 0, 3, 2])
+            >>> print(counts)
+            Tensor(shape=[4], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [1, 1, 3, 1])
+
+            >>> x = paddle.to_tensor([[2, 1, 3], [3, 0, 1], [2, 1, 3]])
+            >>> unique = paddle.compat.unique(x)
+            >>> print(unique)
+            Tensor(shape=[4], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [0, 1, 2, 3])
+
+            >>> unique = paddle.compat.unique(x, dim=0)
+            >>> print(unique)
+            Tensor(shape=[2, 3], dtype=int64, place=Place(cpu), stop_gradient=True,
+            [[2, 1, 3],
+             [3, 0, 1]])
+    """
+    return paddle.unique(
+        input,
+        return_inverse=return_inverse,
+        return_counts=return_counts,
+        axis=dim,
+        sorted=sorted,
+    )
 
 
 @ForbidKeywordsDecorator(

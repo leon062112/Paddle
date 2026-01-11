@@ -13,11 +13,10 @@
 // limitations under the License.
 
 #include "paddle/phi/core/memory/allocation/virtual_memory_auto_growth_best_fit_allocator.h"
-
 #include <algorithm>
 #include <mutex>
+#include "glog/logging.h"
 #include "paddle/common/flags.h"
-
 #include "paddle/phi/core/memory/allocation/aligned_allocator.h"
 #include "paddle/phi/core/memory/allocation/cuda_virtual_mem_allocator.h"
 
@@ -142,7 +141,14 @@ phi::Allocation *VirtualMemoryAutoGrowthBestFitAllocator::AllocateImpl(
 void VirtualMemoryAutoGrowthBestFitAllocator::FreeImpl(
     phi::Allocation *allocation) {
   std::lock_guard<SpinLock> guard(spinlock_);
-  auto block_it = static_cast<BlockAllocation *>(allocation)->block_it_;
+  void *ptr = allocation->ptr();
+  auto block_it = FindBlockByPtr(ptr);
+  if (block_it == all_blocks_.end()) {
+    VLOG(4) << "[VMM][FreeImplMissingBlock] ptr=" << ptr
+            << " allocation_size=" << allocation->size();
+    delete allocation;
+    return;
+  }
   TryMergeBlock2Blocks(block_it);
   delete allocation;
 }
@@ -159,6 +165,14 @@ bool VirtualMemoryAutoGrowthBestFitAllocator::CollectTensorParts(
     }
   }
   return false;
+}
+
+std::list<Block>::iterator
+VirtualMemoryAutoGrowthBestFitAllocator::FindBlockByPtr(void *ptr) {
+  for (auto it = all_blocks_.begin(); it != all_blocks_.end(); ++it) {
+    if (it->ptr_ == ptr) return it;
+  }
+  return all_blocks_.end();
 }
 
 void VirtualMemoryAutoGrowthBestFitAllocator::TryMergeBlock2Blocks(

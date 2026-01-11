@@ -34,13 +34,13 @@ void ConcatKernel(const Context& dev_ctx,
 
   axis = funcs::ComputeAxis(axis, x[0]->dims().size());
 
-  std::vector<phi::DDim> x_dims;
+  std::vector<DDim> x_dims;
   x_dims.reserve(x.size());
   for (auto item : x) {
     x_dims.push_back(item->dims());
   }
 
-  phi::DDim out_dims = funcs::ComputeAndCheckShape(true, x_dims, axis);
+  DDim out_dims = funcs::ComputeAndCheckShape(true, x_dims, axis);
   out->Resize(out_dims);
   dev_ctx.template Alloc<T>(out);
   if (out->numel() == 0) {
@@ -98,7 +98,7 @@ void ConcatKernel(const Context& dev_ctx,
     }
   } else {
     // TODO(chenweihang): concat functor support vector<DenseTensor*> input
-    std::vector<phi::DenseTensor> inputs;
+    std::vector<DenseTensor> inputs;
     inputs.reserve(x.size());
     for (auto item : x) {
       if (item->numel() > 0) {

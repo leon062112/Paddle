@@ -113,7 +113,7 @@ def async_save(
         sync_other_task(bool) : Determine whether to wait other async save task to be finished before this one be put in queue.
         **configs(dict, optional): compatible argument to paddle.save, but will be overridden by default setting.
     Examples:
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-1
 
             import paddle
@@ -817,7 +817,7 @@ def save(
         None
 
     Examples:
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-1
 
             >>> # example 1: dynamic graph
@@ -828,11 +828,8 @@ def save(
             >>> # save state_dict of emb
             >>> paddle.save(layer_state_dict, "emb.pdparams")
 
-            >>> scheduler = paddle.optimizer.lr.NoamDecay(
-            ...     d_model=100, warmup_steps=100, verbose=True)
-            >>> adam = paddle.optimizer.Adam(
-            ...     learning_rate=scheduler,
-            ...     parameters=emb.parameters())
+            >>> scheduler = paddle.optimizer.lr.NoamDecay(d_model=100, warmup_steps=100, verbose=True)
+            >>> adam = paddle.optimizer.Adam(learning_rate=scheduler, parameters=emb.parameters())
             >>> opt_state_dict = adam.state_dict()
 
             >>> # save state_dict of optimizer
@@ -840,7 +837,7 @@ def save(
             >>> # save weight of emb
             >>> paddle.save(emb.weight, "emb.weight.pdtensor")
 
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-2
 
             >>> # example 2: Save multiple state_dict at the same time
@@ -873,7 +870,7 @@ def save(
             >>> prog = paddle.static.default_main_program()
             >>> for var in prog.list_vars():
             ...     if list(var.shape) == [224, 10]:
-            ...         tensor = var.get_value()
+            ...         tensor = paddle.static.global_scope().find_var(var.name).get_tensor()
             ...         break
 
             >>> # save/load tensor
@@ -884,7 +881,7 @@ def save(
             >>> path_state_dict = 'temp/model.pdparams'
             >>> paddle.save(prog.state_dict("param"), path_tensor)
 
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-4
 
             >>> # example 4: save program
@@ -892,14 +889,13 @@ def save(
 
             >>> paddle.enable_static()
 
-            >>> data = paddle.static.data(
-            ...     name='x_static_save', shape=(None, 224), dtype='float32')
+            >>> data = paddle.static.data(name='x_static_save', shape=(None, 224), dtype='float32')
             >>> y_static = z = paddle.static.nn.fc(data, 10)
             >>> main_program = paddle.static.default_main_program()
             >>> path = "example/main_program.pdmodel"
             >>> paddle.save(main_program, path)
 
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-5
 
             >>> # example 5: save object to memory
@@ -1109,7 +1105,7 @@ def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
         Object(Object): a target object can be used in paddle
 
     Examples:
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-1
 
             >>> # example 1: dynamic graph
@@ -1121,10 +1117,14 @@ def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
             >>> paddle.save(layer_state_dict, "emb.pdparams")
 
             >>> scheduler = paddle.optimizer.lr.NoamDecay(
-            ...     d_model=100, warmup_steps=100, verbose=True)
+            ...     d_model=100,
+            ...     warmup_steps=100,
+            ...     verbose=True,
+            ... )
             >>> adam = paddle.optimizer.Adam(
             ...     learning_rate=scheduler,
-            ...     parameters=emb.parameters())
+            ...     parameters=emb.parameters(),
+            ... )
             >>> opt_state_dict = adam.state_dict()
 
             >>> # save state_dict of optimizer
@@ -1139,7 +1139,7 @@ def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
             >>> # load weight of emb
             >>> load_weight = paddle.load("emb.weight.pdtensor")
 
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-2
 
             >>> # example 2: Load multiple state_dict at the same time
@@ -1154,7 +1154,7 @@ def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
             >>> paddle.save(obj, path)
             >>> obj_load = paddle.load(path)
 
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-3
 
             >>> # example 3: static graph
@@ -1173,7 +1173,7 @@ def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
             >>> prog = paddle.static.default_main_program()
             >>> for var in prog.list_vars():
             ...     if list(var.shape) == [224, 10]:
-            ...         tensor = var.get_value()
+            ...         tensor = paddle.static.global_scope().find_var(var.name).get_tensor()
             ...         break
 
             >>> # save/load tensor
@@ -1186,7 +1186,7 @@ def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
             >>> paddle.save(prog.state_dict("param"), path_tensor)
             >>> load_state_dict = paddle.load(path_tensor)
 
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-4
 
             >>> # example 4: load program
@@ -1194,15 +1194,14 @@ def load(path: str | BytesIO, **configs: Unpack[_LoadOptions]) -> Any:
 
             >>> paddle.enable_static()
 
-            >>> data = paddle.static.data(
-            ...     name='x_static_save', shape=(None, 224), dtype='float32')
+            >>> data = paddle.static.data(name='x_static_save', shape=(None, 224), dtype='float32')
             >>> y_static = z = paddle.static.nn.fc(data, 10)
             >>> main_program = paddle.static.default_main_program()
             >>> path = "example/main_program.pdmodel"
             >>> paddle.save(main_program, path)
             >>> load_main = paddle.load(path)
 
-        .. code-block:: python
+        .. code-block:: pycon
             :name: code-example-5
 
             >>> # example 5: save object to memory
