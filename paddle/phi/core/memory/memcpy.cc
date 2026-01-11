@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/phi/core/memory/memcpy.h"
+#include "glog/logging.h"
 
 #include "paddle/phi/api/profiler/event_tracing.h"
 #include "paddle/phi/common/place.h"
@@ -398,6 +399,7 @@ void Copy<phi::XPUPinnedPlace, phi::XPUPlace>(phi::XPUPinnedPlace dst_place,
                     reinterpret_cast<cudaStream_t>(stream));
 
   } else {
+    cudaDeviceSynchronize();
     phi::RecordEvent record_event(
         "cudaMemcpy:XPU->XPUPinned", phi::TracerEventType::UserDefined, 1);
     cudaMemcpy(dst, src, num, cudaMemcpyDeviceToHost);
@@ -434,6 +436,7 @@ void Copy<phi::XPUPlace, phi::XPUPinnedPlace>(phi::XPUPlace dst_place,
                     cudaMemcpyHostToDevice,
                     reinterpret_cast<cudaStream_t>(stream));
   } else {
+    cudaDeviceSynchronize();
     phi::RecordEvent record_event(
         "cudaMemcpy:XPUPinned->XPU", phi::TracerEventType::UserDefined, 1);
     cudaMemcpy(dst, src, num, cudaMemcpyHostToDevice);

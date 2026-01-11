@@ -27,7 +27,7 @@ from typing import (
 import paddle
 
 from ..aoa.aoa_engine import SUPPORTED_DTYPES, AOAEngine
-from .load_state_dict import (
+from .resharder import (
     ReadItem,
 )
 from .sharded_weight import (
@@ -472,7 +472,7 @@ class SingleCommGroupFullParamAssembler(BaseAssembler):
         """Simple assembly path for a single GPU."""
         for k, v in self.filtered_sharded_state_dict.items():
             assert v.local_shape == v.global_shape, (
-                "Single card params must not be sharded."
+                "Single card params must not be sharded.But now the key is {k}, the local_shape is {v.local_shape}, the global_shape is {v.global_shape}."
             )
 
         for k, shard_mappings in self.destination_sharded_mappings.items():
@@ -522,9 +522,14 @@ class SingleCommGroupFullParamAssembler(BaseAssembler):
             else:
                 local_tensor = paddle.empty(item.slice_shape, dtype=item.dtype)
 
+            on_cpu = local_tensor.place.is_cpu_place()
+            if on_cpu:
+                local_tensor = local_tensor.cuda()
             paddle.distributed.broadcast(
                 local_tensor, src=cur_src_rank, group=self.process_group
             )
+            if on_cpu:
+                local_tensor = local_tensor.cpu()
 
             shard_desc = ShardedWeightDesc(
                 key=item.tensor_name,
@@ -810,7 +815,7 @@ def full_param(
     v_group = kwargs.pop("v_group", None)
     process_group = kwargs.pop("process_group", None)
     num_splits = kwargs.pop("num_splits", 1)
-    memory_growth_threshold = kwargs.pop("memory_growth_threshold", 8 * (2**32))
+    memory_growth_threshold = kwargs.pop("memory_growth_threshold", 8 * (2**30))
     idx = kwargs.pop("shard_idx", 0)
     assert (h_group and v_group) or not (h_group or v_group), (
         "Both horizontal and vertical groups must be provided when using FullParamAssembler."

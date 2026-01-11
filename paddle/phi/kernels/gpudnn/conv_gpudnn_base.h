@@ -102,9 +102,9 @@ struct ConvArgsBase {
   phi::backends::gpu::FilterDescriptor wdesc;
   phi::backends::gpu::ConvolutionDescriptor cdesc;
 
-  const phi::DenseTensor* x = nullptr;
-  const phi::DenseTensor* w = nullptr;
-  const phi::DenseTensor* o = nullptr;
+  const DenseTensor* x = nullptr;
+  const DenseTensor* w = nullptr;
+  const DenseTensor* o = nullptr;
 
   DataT cudnn_dtype;
 
@@ -122,9 +122,9 @@ struct ConvArgsBase {
   DataLayout data_layout;
 
   ConvArgsBase(const HandleT& h,
-               const phi::DenseTensor* x,
-               const phi::DenseTensor* w,
-               const phi::DenseTensor* o,
+               const DenseTensor* x,
+               const DenseTensor* w,
+               const DenseTensor* o,
                const std::vector<int> s,
                const std::vector<int> p,
                const std::vector<int> d,
@@ -163,7 +163,7 @@ struct ConvArgsBase {
   }
 };
 
-static inline void GetNCDHW(const phi::DDim& dims,
+static inline void GetNCDHW(const DDim& dims,
                             const DataLayout& layout,
                             int* N,
                             int* C,
@@ -185,9 +185,9 @@ static inline void GetNCDHW(const phi::DDim& dims,
 }
 
 template <typename DeviceContext, typename T, size_t D>
-static void RemovePaddingSlice(const phi::GPUContext& dev_ctx,
-                               const phi::DenseTensor* input,
-                               phi::DenseTensor* out,
+static void RemovePaddingSlice(const GPUContext& dev_ctx,
+                               const DenseTensor* input,
+                               DenseTensor* out,
                                const std::vector<int>& starts,
                                const std::vector<int>& axes) {
   auto& place = *dev_ctx.eigen_device();
@@ -214,7 +214,7 @@ static void RemovePaddingSlice(const phi::GPUContext& dev_ctx,
   auto out_t = phi::EigenTensor<T, D, Eigen::RowMajor, Eigen::DenseIndex>::From(
       *out, new_out_dims);
 
-  phi::funcs::EigenSlice<std::decay_t<decltype(place)>, T, D>::Eval(
+  funcs::EigenSlice<std::decay_t<decltype(place)>, T, D>::Eval(
       place, out_t, in_t, offsets, extents);
 }
 

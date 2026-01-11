@@ -14,6 +14,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 #include "paddle/common/ddim.h"
 #include "paddle/common/layout.h"
 #include "paddle/phi/backends/context_pool.h"
@@ -49,12 +52,12 @@ inline T AreaPixelComputeScale(int64_t input_size,
 template <typename T>
 HOSTDEVICE inline T AreaPixelComputeSourceIndex(T scale,
                                                 int64_t dst_index,
-                                                bool align_corners,
-                                                T align_type_value = 0.5) {
+                                                bool align_corners) {
   if (align_corners) {
     return scale * dst_index;
   } else {
-    return scale * (dst_index + align_type_value) - align_type_value;
+    T src_idx = scale * (dst_index + T(0.5)) - T(0.5);
+    return src_idx;
   }
 }
 
@@ -126,7 +129,7 @@ inline std::vector<int> get_new_shape(
                           tensor->dims()));
     if (tensor->dtype() == phi::DataType::INT64) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-      if (tensor->place().GetType() == phi::AllocationType::CUSTOM) {
+      if (tensor->place().GetType() == AllocationType::CUSTOM) {
         DenseTensor temp;
         phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
         vec_new_shape.push_back(static_cast<int64_t>(*temp.data<int64_t>()));
@@ -134,14 +137,14 @@ inline std::vector<int> get_new_shape(
       }
 #endif
 #ifdef PADDLE_WITH_XPU
-      if (tensor->place().GetType() == phi::AllocationType::XPU) {
+      if (tensor->place().GetType() == AllocationType::XPU) {
         DenseTensor temp;
         phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
         vec_new_shape.push_back(static_cast<int64_t>(*temp.data<int64_t>()));
         continue;
       }
 #endif
-      if (tensor->place().GetType() == phi::AllocationType::GPU) {
+      if (tensor->place().GetType() == AllocationType::GPU) {
         DenseTensor temp;
         phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
         vec_new_shape.push_back(static_cast<int64_t>(*temp.data<int64_t>()));
@@ -150,7 +153,7 @@ inline std::vector<int> get_new_shape(
       }
     } else if (tensor->dtype() == phi::DataType::INT32) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-      if (tensor->place().GetType() == phi::AllocationType::CUSTOM) {
+      if (tensor->place().GetType() == AllocationType::CUSTOM) {
         DenseTensor temp;
         phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
         vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
@@ -158,14 +161,14 @@ inline std::vector<int> get_new_shape(
       }
 #endif
 #ifdef PADDLE_WITH_XPU
-      if (tensor->place().GetType() == phi::AllocationType::XPU) {
+      if (tensor->place().GetType() == AllocationType::XPU) {
         DenseTensor temp;
         phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
         vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
         continue;
       }
 #endif
-      if (tensor->place().GetType() == phi::AllocationType::GPU) {
+      if (tensor->place().GetType() == AllocationType::GPU) {
         DenseTensor temp;
         phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
         vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
@@ -186,20 +189,20 @@ inline std::vector<T> get_new_data_from_tensor(
   DenseTensor cpu_starts_tensor;
   auto& pool = phi::DeviceContextPool::Instance();
   phi::DeviceContext* dev_ctx = pool.Get(new_data_tensor->place());
-  if (new_data_tensor->place().GetType() == phi::AllocationType::GPU) {
+  if (new_data_tensor->place().GetType() == AllocationType::GPU) {
     phi::Copy(
         *dev_ctx, *new_data_tensor, phi::CPUPlace(), true, &cpu_starts_tensor);
     new_data = cpu_starts_tensor.data<T>();
   }
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-  if (new_data_tensor->place().GetType() == phi::AllocationType::CUSTOM) {
+  if (new_data_tensor->place().GetType() == AllocationType::CUSTOM) {
     phi::Copy(
         *dev_ctx, *new_data_tensor, phi::CPUPlace(), true, &cpu_starts_tensor);
     new_data = cpu_starts_tensor.data<T>();
   }
 #endif
 #ifdef PADDLE_WITH_XPU
-  if (new_data_tensor->place().GetType() == phi::AllocationType::XPU) {
+  if (new_data_tensor->place().GetType() == AllocationType::XPU) {
     phi::Copy(
         *dev_ctx, *new_data_tensor, phi::CPUPlace(), true, &cpu_starts_tensor);
     new_data = cpu_starts_tensor.data<T>();
@@ -264,6 +267,75 @@ struct BicubicFilterFunctor {
   }
 
   static constexpr int size = 4;
+};
+
+// Helper function to compute interpolation kernel size
+inline int ComputeInterpSize(float ratio, int filter_size) {
+  float support =
+      (ratio >= 1.0f) ? (filter_size * 0.5f) * ratio : filter_size * 0.5f;
+  return 1 + 2 * static_cast<int>(ceilf(support));
+}
+
+// Structure to hold AA interpolation launch configuration
+struct AAInterpLaunchConfig {
+  int block_x;
+  int block_y;
+  int grid_x;
+  int grid_y;
+  int grid_z;
+  int interp_height;
+  int interp_width;
+  size_t shmem_size;
+
+  AAInterpLaunchConfig(int out_h,
+                       int out_w,
+                       int64_t nc,
+                       float ratio_h,
+                       float ratio_w,
+                       int filter_size,
+                       size_t element_size,
+                       size_t max_shmem,
+                       int max_grid_z,
+                       int warp_size,
+                       bool need_buffer = true) {
+    interp_height = ComputeInterpSize(ratio_h, filter_size);
+    interp_width = ComputeInterpSize(ratio_w, filter_size);
+
+    // Start with default block size
+    block_x = std::min(warp_size, 32);
+    block_y = std::min(256 / block_x, 8);
+
+    // Compute required shared memory
+    auto compute_shmem = [&]() -> size_t {
+      size_t weights_per_block = static_cast<size_t>(interp_width) * block_x +
+                                 static_cast<size_t>(interp_height) * block_y;
+      if (need_buffer) {
+        weights_per_block +=
+            static_cast<size_t>(interp_height) * block_y * block_x;
+      }
+      return weights_per_block * element_size;
+    };
+
+    shmem_size = compute_shmem();
+
+    // Dynamically reduce block size if shared memory exceeds limit
+    while (shmem_size > max_shmem && (block_x > 4 || block_y > 1)) {
+      // Reduce block_y first as it has larger impact on buffer size
+      if (block_y > 1) {
+        block_y = std::max(1, block_y / 2);
+      } else if (block_x > 4) {
+        block_x = std::max(4, block_x / 2);
+      }
+      shmem_size = compute_shmem();
+    }
+
+    // Compute grid dimensions
+    grid_x = (out_w + block_x - 1) / block_x;
+    grid_y = (out_h + block_y - 1) / block_y;
+    grid_z = std::min(static_cast<int>(nc), max_grid_z);
+  }
+
+  bool IsValid(size_t max_shmem) const { return shmem_size <= max_shmem; }
 };
 
 }  // namespace antialias

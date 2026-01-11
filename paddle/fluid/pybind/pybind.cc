@@ -122,22 +122,21 @@ limitations under the License. */
 #include "paddle/fluid/pybind/gloo_context_py.h"
 #include "paddle/fluid/pybind/gloo_wrapper_py.h"
 #include "paddle/fluid/pybind/graph.h"
-#include "paddle/fluid/pybind/heter_wrapper_py.h"
 #include "paddle/fluid/pybind/imperative.h"
 #include "paddle/fluid/pybind/inference_api.h"
 #include "paddle/fluid/pybind/io.h"
-#include "paddle/fluid/pybind/ir_meta_tensor.h"
-#include "paddle/fluid/pybind/ir_tensor.h"
 #include "paddle/fluid/pybind/jit.h"
 #include "paddle/fluid/pybind/metrics_py.h"
+#include "paddle/fluid/pybind/native_meta_tensor.h"
 #include "paddle/fluid/pybind/pir.h"
-#include "paddle/fluid/pybind/ps_gpu_wrapper_py.h"
 #include "paddle/fluid/pybind/pybind_variant_caster.h"
 #include "paddle/fluid/pybind/python_callable_registry.h"
 #include "paddle/fluid/pybind/xpu_streams_py.h"
 #include "paddle/phi/backends/cpu/cpu_info.h"
 #include "paddle/phi/backends/device_manager.h"
 #include "paddle/phi/backends/dynload/dynamic_loader.h"
+#include "paddle/phi/backends/gpu/gpu_info.h"
+#include "paddle/phi/backends/xpu/xpu_info.h"
 #include "paddle/phi/common/data_type.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/compat/convert_utils.h"
@@ -198,6 +197,7 @@ limitations under the License. */
 #include "paddle/phi/core/platform/device/custom/custom_device_resource_pool.h"
 #endif
 
+#include "paddle/phi/backends/c_cuda_graph_lib.h"
 #include "paddle/phi/core/platform/cuda_graph_with_memory_pool.h"
 
 #ifdef PADDLE_WITH_IPU
@@ -408,13 +408,7 @@ bool IsCompiledWithCINN() {
 #endif
 }
 
-bool IsCompiledWithHETERPS() {
-#ifndef PADDLE_WITH_HETERPS
-  return false;
-#else
-  return true;
-#endif
-}
+bool IsCompiledWithHETERPS() { return false; }
 
 bool SupportsBfloat16() {
 #ifndef PADDLE_WITH_DNNL
@@ -1574,8 +1568,7 @@ PYBIND11_MODULE(libpaddle, m) {
   BindJit(&m);
   BindSot(&m);
   BindCustomDevicePy(&m);
-  BindIrTensor(&m);
-  BindIrMetaTensor(&m);
+  BindNativeMetaTensor(&m);
   BindEagerUtils(m.ptr());
   BindOpFunctionCommon(m.ptr());
 
@@ -1782,16 +1775,26 @@ PYBIND11_MODULE(libpaddle, m) {
 #endif
 
   m.def("is_cuda_graph_capturing", &platform::IsCUDAGraphCapturing);
-#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
+    defined(PADDLE_WITH_CUSTOM_DEVICE)
   py::class_<phi::backends::gpu::CUDAGraph>(m, "CUDAGraph")
       .def_static("begin_capture",
-                  [](phi::GPUPlace place, int mode) {
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+                  [](GPUPlace place, int mode) {
                     platform::BeginCUDAGraphCapture(
                         place, static_cast<paddle::gpuStreamCaptureMode>(mode));
-                  })
+                  }
+#else
+          [](phi::CustomPlace place, int mode) {
+            platform::BeginCUDAGraphCapture(
+                place, static_cast<phi::graph::streamCaptureMode>(mode));
+          }
+#endif
+                  )
       .def_static(
           "begin_capture_with_pool_id",
-          [](phi::GPUPlace place, int mode, std::optional<int64_t> pool_id) {
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+          [](GPUPlace place, int mode, std::optional<int64_t> pool_id) {
             if (pool_id.has_value()) {
               platform::BeginCUDAGraphCapture(
                   place,
@@ -1801,7 +1804,21 @@ PYBIND11_MODULE(libpaddle, m) {
               platform::BeginCUDAGraphCapture(
                   place, static_cast<paddle::gpuStreamCaptureMode>(mode));
             }
-          })
+          }
+#else
+          [](phi::CustomPlace place, int mode, std::optional<int64_t> pool_id) {
+            if (pool_id.has_value()) {
+              platform::BeginCUDAGraphCapture(
+                  place,
+                  static_cast<phi::graph::streamCaptureMode>(mode),
+                  pool_id.value());
+            } else {
+              platform::BeginCUDAGraphCapture(
+                  place, static_cast<phi::graph::streamCaptureMode>(mode));
+            }
+          }
+#endif
+          )
       .def_static("end_capture", &platform::EndCUDAGraphCapture)
       .def_static("gen_new_memory_pool_id",
                   &phi::backends::gpu::CUDAGraph::UniqueMemoryPoolID)
@@ -1841,7 +1858,7 @@ PYBIND11_MODULE(libpaddle, m) {
                  phi::IntArray({slicelength}),
                  dtype_phi,
                  phi::DataLayout::NCHW,
-                 phi::CPUPlace(),
+                 CPUPlace(),
                  [self_sp = std::move(self_sp)](
                      void *) mutable {  // NOLINT(readability/casting)
                    pybind11::gil_scoped_acquire gil;
@@ -1902,7 +1919,7 @@ PYBIND11_MODULE(libpaddle, m) {
                          phi::IntArray({actual_count}),
                          dtype,
                          phi::DataLayout::NCHW,
-                         phi::CPUPlace(),
+                         CPUPlace(),
                          [obj = obj.release()](void *) {
                            pybind11::gil_scoped_acquire gil;
                            Py_DECREF(obj);
@@ -2731,7 +2748,7 @@ All parameter, weight, gradient are variables in Paddle.
 
   py::class_<phi::DeviceContext>(m, "DeviceContext")
       .def_static("create",
-                  [](phi::CPUPlace &place) -> phi::DeviceContext * {
+                  [](CPUPlace &place) -> phi::DeviceContext * {
                     auto *context = new phi::CPUContext();
                     context->SetAllocator(
                         paddle::memory::allocation::AllocatorFacade::Instance()
@@ -2739,7 +2756,7 @@ All parameter, weight, gradient are variables in Paddle.
                             .get());
                     context->SetHostAllocator(
                         paddle::memory::allocation::AllocatorFacade::Instance()
-                            .GetAllocator(phi::CPUPlace())
+                            .GetAllocator(CPUPlace())
                             .get());
                     context->SetZeroAllocator(
                         paddle::memory::allocation::AllocatorFacade::Instance()
@@ -2747,7 +2764,7 @@ All parameter, weight, gradient are variables in Paddle.
                             .get());
                     context->SetHostZeroAllocator(
                         paddle::memory::allocation::AllocatorFacade::Instance()
-                            .GetZeroAllocator(phi::CPUPlace())
+                            .GetZeroAllocator(CPUPlace())
                             .get());
                     return context;
                   })
@@ -2766,7 +2783,7 @@ All parameter, weight, gradient are variables in Paddle.
                     .get());
             context->SetHostAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
-                    .GetAllocator(phi::CPUPlace())
+                    .GetAllocator(CPUPlace())
                     .get());
             context->SetZeroAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
@@ -2774,7 +2791,7 @@ All parameter, weight, gradient are variables in Paddle.
                     .get());
             context->SetHostZeroAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
-                    .GetZeroAllocator(phi::CPUPlace())
+                    .GetZeroAllocator(CPUPlace())
                     .get());
             context->SetPinnedAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
@@ -2807,7 +2824,7 @@ All parameter, weight, gradient are variables in Paddle.
                   })
       .def_static(
           "create",
-          [](phi::GPUPlace &place) -> phi::DeviceContext * {
+          [](GPUPlace &place) -> phi::DeviceContext * {
 #if !defined(PADDLE_WITH_CUDA) && !defined(PADDLE_WITH_HIP)
             PADDLE_THROW(common::errors::PermissionDenied(
                 "Cannot use CUDAPlace in CPU only version, "
@@ -2820,7 +2837,7 @@ All parameter, weight, gradient are variables in Paddle.
                     .get());
             context->SetHostAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
-                    .GetAllocator(phi::CPUPlace())
+                    .GetAllocator(CPUPlace())
                     .get());
             context->SetZeroAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
@@ -2828,7 +2845,7 @@ All parameter, weight, gradient are variables in Paddle.
                     .get());
             context->SetHostZeroAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
-                    .GetZeroAllocator(phi::CPUPlace())
+                    .GetZeroAllocator(CPUPlace())
                     .get());
             context->SetPinnedAllocator(
                 paddle::memory::allocation::AllocatorFacade::Instance()
@@ -2855,12 +2872,16 @@ All parameter, weight, gradient are variables in Paddle.
     std::vector<std::string> device_types;
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
     device_types = phi::DeviceManager::GetAllDeviceTypes();
+#elif defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+    device_types.push_back("gpu");
+#elif defined(PADDLE_WITH_XPU)
+    device_types.push_back("xpu");
 #else
           VLOG(1) << string::Sprintf(
               "Cannot use get_all_device_type because you have installed "
-              "CPU/GPU version PaddlePaddle.\n"
+              "CPU version PaddlePaddle.\n"
               "If you want to use get_all_device_type, please try to install "
-              "CustomDevice version "
+              "CUDA/XPU/CustomDevice version "
               "PaddlePaddle by: pip install paddlepaddle\n");
 #endif
     return device_types;
@@ -2883,12 +2904,22 @@ All parameter, weight, gradient are variables in Paddle.
     std::vector<std::string> devices;
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
     devices = phi::DeviceManager::GetAllDeviceList();
+#elif defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+    int gpu_count = phi::backends::gpu::GetGPUDeviceCount();
+    for (int i = 0; i < gpu_count; ++i) {
+      devices.push_back("gpu:" + std::to_string(i));
+    }
+#elif defined(PADDLE_WITH_XPU)
+    int xpu_count = phi::backends::xpu::GetXPUDeviceCount();
+    for (int i = 0; i < xpu_count; ++i) {
+      devices.push_back("xpu:" + std::to_string(i));
+    }
 #else
           VLOG(1) << string::Sprintf(
               "Cannot use get_available_device because you have installed "
-              "CPU/GPU version PaddlePaddle.\n"
+              "CPU version PaddlePaddle.\n"
               "If you want to use get_available_device, please try to install "
-              "CustomDevice version "
+              "CUDA/XPU/CustomDevice version "
               "PaddlePaddle by: pip install paddlepaddle\n");
 #endif
     return devices;
@@ -2944,9 +2975,7 @@ All parameter, weight, gradient are variables in Paddle.
                     return OpRegistry::CreateOp(desc);
                   })
       .def("run",
-           [](OperatorBase &self,
-              const Scope &scope,
-              const phi::CPUPlace &place) {
+           [](OperatorBase &self, const Scope &scope, const CPUPlace &place) {
              pybind11::gil_scoped_release release;
              self.Run(scope, place);
            })
@@ -2958,9 +2987,7 @@ All parameter, weight, gradient are variables in Paddle.
              self.Run(scope, place);
            })
       .def("run",
-           [](OperatorBase &self,
-              const Scope &scope,
-              const phi::GPUPlace &place) {
+           [](OperatorBase &self, const Scope &scope, const GPUPlace &place) {
              pybind11::gil_scoped_release release;
              self.Run(scope, place);
            })
@@ -3167,7 +3194,7 @@ All parameter, weight, gradient are variables in Paddle.
         framework::interpreter::GetNoNeedBufferValues);
 #ifdef PADDLE_WITH_CUDA
   py::class_<phi::GPUEventTimer>(m, "GPUEventTimer")
-      .def(py::init<phi::GPUPlace>(), py::arg("place"))
+      .def(py::init<GPUPlace>(), py::arg("place"))
       .def(
           "start",
           [](phi::GPUEventTimer &timer, phi::CUDAStream *stream) {
@@ -3280,7 +3307,7 @@ All parameter, weight, gradient are variables in Paddle.
   m.def("op_supported_infos", imperative::OpSupportedInfos);
   m.def("is_compiled_with_brpc", IsCompiledWithBrpc);
   m.def("is_compiled_with_dist", IsCompiledWithDIST);
-  m.def("_cuda_synchronize", [](const phi::GPUPlace &place) {
+  m.def("_cuda_synchronize", [](const GPUPlace &place) {
     phi::DeviceContextPool::Instance().Get(place)->Wait();
   });
   m.def("_set_warmup", [](bool warmup) {
@@ -3427,7 +3454,7 @@ All parameter, weight, gradient are variables in Paddle.
 
   m.def("_is_program_version_supported", IsProgramVersionSupported);
 #if defined(PADDLE_WITH_CUDA)
-  m.def("allocator_dump", [](const phi::GPUPlace &place) {
+  m.def("allocator_dump", [](const GPUPlace &place) {
     auto allocator = std::dynamic_pointer_cast<
         paddle::memory::allocation::AutoGrowthBestFitAllocator>(
         paddle::memory::allocation::AllocatorFacade::Instance()
@@ -3620,7 +3647,7 @@ All parameter, weight, gradient are variables in Paddle.
   m.def("cuda_empty_cache", [] {
     for (int dev_id : platform::GetSelectedDevices()) {
       auto *dev_ctx =
-          phi::DeviceContextPool::Instance().GetByPlace(phi::GPUPlace(dev_id));
+          phi::DeviceContextPool::Instance().GetByPlace(GPUPlace(dev_id));
       dev_ctx->cudnn_workspace_handle().ResetWorkspace();
     }
     platform::EmptyCache();
@@ -3674,23 +3701,22 @@ All parameter, weight, gradient are variables in Paddle.
 #endif
 #if defined(PADDLE_WITH_CUDA)
   m.def("vmm_max_free_size", [](int device_id) {
-    return memory::VmmMaxFreeSize(phi::GPUPlace(device_id), 1);
+    return memory::VmmMaxFreeSize(GPUPlace(device_id), 1);
   });
   m.def("vmm_compact", [](int device_id) {
-    return paddle::memory::VmmCompact(phi::GPUPlace(device_id));
+    return paddle::memory::VmmCompact(GPUPlace(device_id));
   });
   m.def("vmm_free_block_info", [](int device_id) {
-    return paddle::memory::FreeBlockInfoOfVmmAllocator(
-        phi::GPUPlace(device_id));
+    return paddle::memory::FreeBlockInfoOfVmmAllocator(GPUPlace(device_id));
   });
   m.def("vmm_all_block_info", [](int device_id) {
-    return paddle::memory::AllBlockInfoOfVmmAllocator(phi::GPUPlace(device_id));
+    return paddle::memory::AllBlockInfoOfVmmAllocator(GPUPlace(device_id));
   });
   m.def("get_allocate_record", [](int device_id) {
-    return paddle::memory::GetAllocateEvent(phi::GPUPlace(device_id));
+    return paddle::memory::GetAllocateEvent(GPUPlace(device_id));
   });
   m.def("get_compact_size", [](int device_id) {
-    return paddle::memory::GetCompactSize(phi::GPUPlace(device_id));
+    return paddle::memory::GetCompactSize(GPUPlace(device_id));
   });
 #endif
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
@@ -3750,6 +3776,40 @@ All parameter, weight, gradient are variables in Paddle.
   m.def("get_xpu_device_count", platform::GetXPUDeviceCount);
   m.def("get_xpu_current_device_id", &platform::GetXPUCurrentDeviceId);
   m.def("xpu_empty_cache", platform::EmptyCache);
+  m.def(
+      "get_device_properties",
+      [](int id) -> const gpuDeviceProp & {
+        return platform::GetDeviceProperties(id);
+      },
+      py::return_value_policy::reference);
+
+  py::class_<gpuDeviceProp>(m, "_gpuDeviceProperties", py::module_local())
+      .def_property_readonly(
+          "name", [](const gpuDeviceProp &prop) { return prop.name; })
+      .def_property_readonly(
+          "major", [](const gpuDeviceProp &prop) { return prop.major; })
+      .def_property_readonly(
+          "minor", [](const gpuDeviceProp &prop) { return prop.minor; })
+      .def_property_readonly(
+          "total_memory",
+          [](const gpuDeviceProp &prop) { return prop.totalGlobalMem; })
+      .def_property_readonly(
+          "multi_processor_count",
+          [](const gpuDeviceProp &prop) { return prop.multiProcessorCount; })
+      .def_property_readonly(
+          "is_multi_gpu_board",
+          [](const gpuDeviceProp &prop) { return prop.isMultiGpuBoard; })
+      .def_property_readonly(
+          "is_integrated",
+          [](const gpuDeviceProp &prop) { return prop.integrated; })
+      .def("__repr__", [](const gpuDeviceProp &prop) {
+        std::stringstream ostr;
+        ostr << "_gpuDeviceProperties(name='" << prop.name
+             << "', major=" << prop.major << ", minor=" << prop.minor
+             << ", total_memory=" << prop.totalGlobalMem / (1024 * 1024)
+             << "MB, multi_processor_count=" << prop.multiProcessorCount << ")";
+        return ostr.str();
+      });
   m.def("get_xpu_device_utilization_rate",
         platform::GetXPUDeviceUtilizationRate);
   m.def("get_xpu_device_total_memory", platform::GetXPUDeviceTotalMemory);

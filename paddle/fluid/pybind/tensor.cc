@@ -94,12 +94,10 @@ limitations under the License. */
 #include "paddle/fluid/pybind/gloo_context_py.h"
 #include "paddle/fluid/pybind/gloo_wrapper_py.h"
 #include "paddle/fluid/pybind/graph.h"
-#include "paddle/fluid/pybind/heter_wrapper_py.h"
 #include "paddle/fluid/pybind/imperative.h"
 #include "paddle/fluid/pybind/inference_api.h"
 #include "paddle/fluid/pybind/io.h"
 #include "paddle/fluid/pybind/metrics_py.h"
-#include "paddle/fluid/pybind/ps_gpu_wrapper_py.h"
 #include "paddle/fluid/pybind/pybind_variant_caster.h"
 #include "paddle/phi/backends/cpu/cpu_info.h"
 #include "paddle/phi/backends/device_manager.h"
@@ -160,10 +158,6 @@ limitations under the License. */
 
 #ifdef PADDLE_WITH_CRYPTO
 #include "paddle/fluid/pybind/crypto.h"
-#endif
-
-#if defined PADDLE_WITH_PSCORE
-#include "paddle/fluid/pybind/fleet_py.h"
 #endif
 
 #include "paddle/common/flags.h"
@@ -405,7 +399,7 @@ phi::DenseTensor RebuildTensorFromVmmMeta(const py::tuple &meta) {
   auto alloc = std::make_unique<memory::allocation::VmmImportedAllocation>(
       reinterpret_cast<void *>(base + header->offset),
       header->alloc_size,
-      phi::GPUPlace(device_id),
+      GPUPlace(device_id),
       keep);
   phi::DenseTensor tensor;
   tensor.Resize(phi::make_ddim(dims_vec));
@@ -456,8 +450,7 @@ std::tuple<phi::DenseTensor, bool> HandleTensorCopy(
   }
 
   if (force_copy || src.place() != dst_place) {
-    phi::Place ctx_place =
-        src.place() != phi::CPUPlace() ? src.place() : dst_place;
+    phi::Place ctx_place = src.place() != CPUPlace() ? src.place() : dst_place;
     phi::DenseTensor dst(
         std::make_shared<phi::Allocation>(nullptr, 0, dst_place), src.meta());
     const auto *dev_ctx = phi::DeviceContextPool::Instance().Get(ctx_place);
@@ -543,7 +536,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
              self.mutable_data<float>(place);
            })
       .def("_alloc_float",
-           [](phi::DenseTensor &self, phi::GPUPlace &place) {
+           [](phi::DenseTensor &self, GPUPlace &place) {
              self.mutable_data<float>(place);
            })
       .def("_alloc_float",
@@ -551,15 +544,15 @@ void BindTensor(pybind11::module &m) {  // NOLINT
              self.mutable_data<float>(place);
            })
       .def("_alloc_float",
-           [](phi::DenseTensor &self, phi::CPUPlace &place) {
+           [](phi::DenseTensor &self, CPUPlace &place) {
              self.mutable_data<float>(place);
            })
       .def("_alloc_double",
-           [](phi::DenseTensor &self, phi::CPUPlace &place) {
+           [](phi::DenseTensor &self, CPUPlace &place) {
              self.mutable_data<double>(place);
            })
       .def("_alloc_int",
-           [](phi::DenseTensor &self, phi::CPUPlace &place) {
+           [](phi::DenseTensor &self, CPUPlace &place) {
              self.mutable_data<int>(place);
            })
       .def("_alloc_int",
@@ -571,7 +564,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
              self.mutable_data<int>(place);
            })
       .def("_alloc_int",
-           [](phi::DenseTensor &self, phi::GPUPlace &place) {
+           [](phi::DenseTensor &self, GPUPlace &place) {
              self.mutable_data<int>(place);
            })
       .def("_alloc_int",
@@ -584,7 +577,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
            })
       .def("_mutable_data",
            [](phi::DenseTensor &self,
-              phi::CPUPlace &place,
+              CPUPlace &place,
               paddle::framework::proto::VarType::Type type) {
              return reinterpret_cast<uintptr_t>(
                  self.mutable_data(place, phi::TransToPhiDataType(type)));
@@ -605,7 +598,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
            })
       .def("_mutable_data",
            [](phi::DenseTensor &self,
-              phi::GPUPlace &place,
+              GPUPlace &place,
               paddle::framework::proto::VarType::Type type) {
              return reinterpret_cast<uintptr_t>(
                  self.mutable_data(place, phi::TransToPhiDataType(type)));
@@ -619,7 +612,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
            })
       .def("_clear", &phi::DenseTensor::clear)
       .def("_copy_from",
-           &TensorCopyFrom<phi::CPUPlace>,
+           &TensorCopyFrom<CPUPlace>,
            py::arg("tensor"),
            py::arg("place"),
            py::arg("batch_size") = -1)
@@ -634,7 +627,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
            py::arg("place"),
            py::arg("batch_size") = -1)
       .def("_copy_from",
-           &TensorCopyFrom<phi::GPUPlace>,
+           &TensorCopyFrom<GPUPlace>,
            py::arg("tensor"),
            py::arg("place"),
            py::arg("batch_size") = -1)
@@ -654,7 +647,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
            py::arg("place"),
            py::arg("batch_size") = -1)
       .def("set",
-           SetTensorFromPyArray<phi::CPUPlace>,
+           SetTensorFromPyArray<CPUPlace>,
            py::arg("array"),
            py::arg("place"),
            py::arg("zero_copy") = false)
@@ -669,7 +662,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
            py::arg("place"),
            py::arg("zero_copy") = false)
       .def("set",
-           SetTensorFromPyArray<phi::GPUPlace>,
+           SetTensorFromPyArray<GPUPlace>,
            py::arg("array"),
            py::arg("place"),
            py::arg("zero_copy") = false)
@@ -979,7 +972,7 @@ void BindTensor(pybind11::module &m) {  // NOLINT
                  std::make_shared<memory::allocation::Allocation>(
                      cuda_ipc_allocation->ptr(),
                      cuda_ipc_allocation->base_ptr(), size,
-                     phi::GPUPlace(device_id));
+                     GPUPlace(device_id));
 
              self.ResetHolderWithType(shared_reader_holder, dtype);
              self.Resize(dims);
@@ -1316,12 +1309,12 @@ void BindTensor(pybind11::module &m) {  // NOLINT
                // copy data & reset holder
                if (phi::is_cuda_pinned_place(holder->place())) {
 #ifdef PADDLE_WITH_CUDA
-                 memory::Copy(phi::CPUPlace(), shared_holder->ptr(),
+                 memory::Copy(CPUPlace(), shared_holder->ptr(),
                               phi::GPUPinnedPlace(), data_ptr, data_size);
 #endif
                } else {
-                 memory::Copy(phi::CPUPlace(), shared_holder->ptr(),
-                              phi::CPUPlace(), data_ptr, data_size);
+                 memory::Copy(CPUPlace(), shared_holder->ptr(),
+                              CPUPlace(), data_ptr, data_size);
                }
                self.ResetHolder(shared_holder);
                mmap_allocation = shared_holder.get();

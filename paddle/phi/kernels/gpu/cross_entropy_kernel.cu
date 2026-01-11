@@ -769,7 +769,7 @@ static void SoftmaxWithCrossEntropySoftLabel(const GPUContext& dev_ctx,
   } else {
     ScopedTensorDescriptor desc;
     std::vector<int> tensor_dims = {N, dim, D, 1};
-    DataLayout layout = DataLayout::kNCHW;
+    DataLayout layout = DataLayout::NCHW;
 #ifdef PADDLE_WITH_HIP
     miopenTensorDescriptor_t descp = desc.descriptor<T>(layout, tensor_dims);
     auto handle = dev_ctx.cudnn_handle();
@@ -1195,7 +1195,7 @@ static void SoftmaxWithCrossEntropyHardLabel(const GPUContext& dev_ctx,
     auto* softmax_data = softmax->data<T>();
     ScopedTensorDescriptor desc;
     std::vector<int> tensor_dims = {N, dim, D, 1};
-    DataLayout layout = DataLayout::kNCHW;
+    DataLayout layout = DataLayout::NCHW;
 
 #ifdef PADDLE_WITH_HIP
     miopenTensorDescriptor_t descp = desc.descriptor<T>(layout, tensor_dims);
@@ -1323,8 +1323,7 @@ void CrossEntropyWithSoftmaxCUDAKernel(const GPUContext& dev_ctx,
 
     // cause of input is softmax
     // copy to output softmax, directly
-    phi::Copy<GPUContext>(
-        dev_ctx, *softmax, dev_ctx.GetPlace(), false, softmax_out);
+    Copy<GPUContext>(dev_ctx, *softmax, dev_ctx.GetPlace(), false, softmax_out);
 
     return;
   }
