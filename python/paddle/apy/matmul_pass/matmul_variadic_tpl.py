@@ -79,6 +79,27 @@ class MatmulVariadicTemplate:
         )
         return compile_cmd
 
+    # cpu -> custom device
+    def make_cpu_compile_cmd(self, dir_name, source_dir):
+        cutlass_dir = f"{dir_name}/matmul/cutlass"
+        compile_cmd = "clang++ -x ivcore -L/usr/local/corex/lib -lcudart --cuda-path=/usr/local/corex -std=c++17 -O3 -fPIC --cuda-gpu-arch=ivcore11 -Xclang=-fcuda-allow-variadic-functions"
+        compile_cmd = compile_cmd + " -I " + cutlass_dir + "/include"
+        compile_cmd = compile_cmd + " -I " + cutlass_dir + "/tools/util/include"
+        compile_cmd = compile_cmd + " -I " + source_dir
+        compile_cmd = (
+            compile_cmd
+            + " -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTLASS_DEBUG_TRACE_LEVEL=0 -DCUTLASS_ILUVATAR"
+        )
+        compile_cmd = (
+            compile_cmd + " -DAP_ENABLE_AUTOTUNE=0 -DAP_ENABLE_DEBUG=0"
+        )
+        compile_cmd = (
+            compile_cmd
+            + f" --shared {self.library_name}.cu -o lib{self.library_name}.so"
+        )
+        return compile_cmd
+
+
     def make_dcu_compile_cmd(self, dir_name, source_dir):
         ck_dir = f"{dir_name}/matmul/composable_kernel"
         compile_cmd = "hipcc -std=c++20 -O3 -fPIC --offload-arch=gfx906"
@@ -364,13 +385,16 @@ void ${kernel_name}(void* stream_ptr, ${AP_KERNEL_ARGS_DECLARE}) {
         dir_name = ap.dirname(__file__)
         source_dir = f"{dir_name}/matmul"
 
-        compile_cmd = (
-            self.make_dcu_compile_cmd(dir_name, source_dir)
-            if device_type == "dcu"
-            else self.make_gpu_compile_cmd(dir_name, source_dir)
+        compile_cmds = ap.OrderedDict(
+            [
+                ["cpu", self.make_cpu_compile_cmd(dir_name, source_dir)],
+                ["dcu", self.make_dcu_compile_cmd(dir_name, source_dir)],
+                ["gpu", self.make_gpu_compile_cmd(dir_name, source_dir)],
+            ]
         )
+        compile_cmd = compile_cmds[device_type]
 
-        file_ext = "cpp" if device_type == "dcu" else "cu"
+        file_ext = "cu"
 
         return CodeModule(  # noqa: F821
             FuncDeclare(  # noqa: F821
